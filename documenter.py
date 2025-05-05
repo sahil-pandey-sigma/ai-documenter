@@ -2,25 +2,27 @@ import os
 import zipfile
 import tempfile
 import re
-from llama_cpp import Llama
+import argparse
+# from openai import OpenAI
 from docx import Document
 from docx.shared import Pt
-
+import cohere
 # ======== Settings ========
-MODEL_PATH = "nous_k_s.gguf"
 UPLOADS_DIR = "uploads"
 OUTPUTS_DIR = "outputs"
 MAX_TOKENS = 1024
+MODEL_NAME = "command-r"
 
-# ======== Initialize Model ========
-print("[+] Loading model...")
-llm = Llama(
-    model_path=MODEL_PATH,
-    n_ctx=4096,
-    n_threads=6,
-    n_gpu_layers=0
-)
-print("[+] Model loaded successfully.")
+# ======== Initialize OpenAI Client ========
+
+
+# ======== Initialize Cohere Client ========
+api_key = os.getenv("COHERE_API_KEY")
+if not api_key:
+    raise ValueError("COHERE_API_KEY environment variable not set.")
+
+client = cohere.Client(api_key)
+
 
 # ======== Helper Functions ========
 
@@ -42,6 +44,20 @@ def read_files(root_dir):
                     print(f"[!] Error reading {file_path}: {e}")
     return file_data
 
+def generate_text(prompt):
+    try:
+        response = client.chat(
+            model="command-r",
+            message=prompt,
+            temperature=0.5,
+            max_tokens=MAX_TOKENS
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"[!] API Error: {e}")
+        return "(Error during generation)"
+
+
 def generate_project_summary(all_code_combined):
     prompt = f"""
 You are a project documentation expert.
@@ -58,12 +74,11 @@ Important Rules:
 - Keep the answers crisp, technical, and clean.
 
 Codebase:
-```text
+text
 {all_code_combined[:6000]}
-```
+
 """
-    output = llm(prompt, max_tokens=MAX_TOKENS)
-    return output["choices"][0]["text"].strip()
+    return generate_text(prompt)
 
 def generate_file_summary(file_name, file_content):
     prompt = f"""
@@ -80,16 +95,15 @@ Purpose: ...
 Working: ...
 Errors: ...
 
-Be clear, technical, and concise. No assumptions.
+Be clear, technical and concise. No assumptions.
 
 File Name: {file_name}
 Code:
-```text
+text
 {file_content[:2000]}
-```
+
 """
-    output = llm(prompt, max_tokens=512)
-    return output["choices"][0]["text"].strip()
+    return generate_text(prompt)
 
 def parse_sections(text):
     match = re.findall(r"(Purpose|Working|Errors):\s*(.*?)(?=(?:Purpose|Working|Errors):|$)", text, re.DOTALL)
@@ -125,7 +139,7 @@ def create_markdown(project_summary, file_summaries, output_path):
     lines.append("\n---\n")
     lines.append("## File Level Summaries\n")
     for file_name, summary in file_summaries.items():
-        lines.append(f"### `{file_name}`\n")
+        lines.append(f"### {file_name}\n")
         parsed = parse_sections(summary)
         for section in ["Purpose", "Working", "Errors"]:
             lines.append(f"- **{section}:** {parsed.get(section, '(Not provided)')}")
@@ -171,14 +185,17 @@ def main(zip_filename):
         print("[+] Creating Markdown...")
         create_markdown(project_summary, file_summaries, output_md_path)
 
-        print(f"[\u2713] Documentation created successfully at:\n  - {output_docx_path}\n  - {output_md_path}")
+        print(f"[✓] Documentation created successfully at:\n  - {output_docx_path}\n  - {output_md_path}")
 
 # ======== Entry Point ========
 
 if __name__ == "__main__":
-    zip_files = [f for f in os.listdir(UPLOADS_DIR) if f.endswith('.zip')]
-    if not zip_files:
-        print("[!] No zip file found in uploads/")
+    parser = argparse.ArgumentParser(description="Generate documentation from a ZIP file of source code.")
+    parser.add_argument("zipfile", type=str, help="Name of the ZIP file inside the uploads/ directory")
+    args = parser.parse_args()
+
+    zip_file_path = os.path.join(UPLOADS_DIR, args.zipfile)
+    if not os.path.isfile(zip_file_path):
+        print(f"[!] File not found: {zip_file_path}")
     else:
-        print(f"[+] Found {zip_files[0]}")
-        main(zip_files[0])
+        main(args.zipfile)
