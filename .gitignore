@@ -1,3 +1,5 @@
+outputs/
 venv/
-nous_k_s.gguf
-project.zip
+logs/
+*.json
+*__pycache__
